@@ -9,57 +9,62 @@ use parser::*;
 use scanner::{TScalarStyle, ScanError, TokenType, Marker};
 
 
-/// A trait representing a parsed Yaml document.
+/// A trait for parsing a stream of YAML documents.
 ///
-/// The trait is used for parsing documents from a Yaml file. The content
-/// of the document will be parsed into a value of the type given through
-/// the `Item` associated type. A document then constructed by passing this
-/// item to the `create()` function.
-pub trait Document: Sized {
+/// Stored YAML data is called a ‘YAML character stream.’ It may contain a
+/// several completely independent documents. The `YamlStream` trait is used
+/// by `GenericYamlLoader` to parse documents from a character stream.
+///
+/// A YAML document consists of elements that are either scalars, sequences,
+/// or mappings. The trait has a method for each of these kinds to create a
+/// new element. All elements are eventually represented by the `Self::Item``
+/// associated type. Sequences and mappings are represented by their own types
+/// and traits while they are being constructed. Once they are finished, they
+/// too need to be converted into `Self::Item`s.
+///
+/// Once a document is finished, the method `create_document()` is called to
+/// give the `Self::Item` representing all elements of the document to the
+/// stream to process it.
+pub trait YamlStream {
     /// The type for all items of the document.
-    type Item: Item;
+    type Item: Clone;
 
-    /// The type for sequences.
+    /// The type used for building sequences.
     type Sequence: Sequence<Item=Self::Item>;
 
-    /// The type for maps.
-    type Map: Map<Item=Self::Item>;
+    /// The type used for building mappings.
+    type Mapping: Mapping<Item=Self::Item>;
 
-    /// Creates a document from an item.
-    fn create(item: Self::Item) -> Self;
-}
-
-/// A trait representing all parsed data items.
-///
-/// Scalar data is created directly using the `create_scalar()` function.
-/// Sequence and mapping data is created using the specialised traits
-/// `Sequence` and `Map` which both are converted into items through their
-/// `finalize()` methods.
-pub trait Item: Clone + Sized {
-    /// Creates a scalar item.
-    fn create_scalar(value: &str, style: TScalarStyle,
-                     tag: &Option<TokenType>, mark: Marker) -> Self;
+    /// Creates a new scalar item.
+    fn create_scalar(&self, value: &str, style: TScalarStyle,
+                     tag: &Option<TokenType>, mark: Marker) -> Self::Item;
 
     /// Creates a bad value item.
     ///
     /// Such values are created for invalid type conversion and when
     /// accessing non-existent aliases.
-    fn create_bad_value() -> Self;
+    fn create_bad_value(&self) -> Self::Item;
+
+    /// Creates a new sequence builder.
+    fn create_sequence(&self, mark: Marker) -> Self::Sequence;
+
+    /// Creates a new mapping builder.
+    fn create_mapping(&self, mark: Marker) -> Self::Mapping;
+
+    /// Creates and consumes a document from an item.
+    fn create_document(&mut self, item: Self::Item);
 }
 
-/// A trait representing parsed sequence data.
-///
-/// When parsing a sequence, a new value of this trait is created through
-/// the `create()` function. Each element of the sequence is parsed into a
-/// value of the `Item` associated type and then added via the `push()`
-/// method. Once all elements are added, the sequence is converted into an
-/// item itself through the `finalize()` method.
-pub trait Sequence: Clone + Sized {
-    /// The item type used by documents containing this sequence.
-    type Item: Item;
 
-    /// Creates a new sequence.
-    fn create(mark: Marker) -> Self;
+/// A trait representing a sequence being parsed.
+///
+/// Each element of the sequence is parsed into a value of the `Self::Item`
+/// associated type and then added via the `push()` method. Once all elements
+/// are added, the sequence is converted into an item itself through the
+/// `finalize()` method.
+pub trait Sequence: Clone {
+    /// The item type used by documents containing this sequence.
+    type Item: Clone;
 
     /// Adds a new element ot the sequence.
     fn push(&mut self, item: Self::Item);
@@ -68,19 +73,15 @@ pub trait Sequence: Clone + Sized {
     fn finalize(self) -> Self::Item;
 }
 
-/// A trait representing parsed map data.
+/// A trait representing a mapping being parsed.
 ///
-/// When parsing a mapping, a new value of this trait is created through
-/// the `create()` function. Key and value of the each element of the mapping
-/// are parsed into values of the `Item` associated type and then added via
-/// the `insert()` method. Once all elements have been added, the map value
+/// Key and value of the each element of the mapping
+/// are parsed into values of the `Self::Item` associated type and then added
+/// via the `insert()` method. Once all elements have been added, the mapping
 /// is converted into an item through the `finalize()` method.
-pub trait Map: Clone + Sized {
+pub trait Mapping: Clone {
     /// The item type used by documents containing this sequence.
-    type Item: Item;
-
-    /// Creates a new mapping.
-    fn create(mark: Marker) -> Self;
+    type Item: Clone;
 
     /// Adds a new element with the given key and value.
     fn insert(&mut self, key: Self::Item, value: Self::Item);
@@ -140,17 +141,28 @@ pub enum Yaml {
     BadValue,
 }
 
-impl Document for Yaml {
-    type Item = Self;
-    type Sequence = Array;
-    type Map = Hash;
 
-    fn create(item: Self) -> Self { item }
+pub struct YamlLoader(Vec<Yaml>);
+
+impl YamlLoader {
+    pub fn new() -> Self {
+        YamlLoader(Vec::new())
+    }
+
+    pub fn load_from_str(source: &str) -> Result<Vec<Yaml>, ScanError> {
+        GenericYamlLoader::load_from_str(source, YamlLoader::new())
+                         .map(|loader| loader.0)
+    }
 }
 
-impl Item for Yaml {
-    fn create_scalar(v: &str, style: TScalarStyle,
-                     tag: &Option<TokenType>, _mark: Marker) -> Self {
+
+impl YamlStream for YamlLoader {
+    type Item = Yaml;
+    type Sequence = Array;
+    type Mapping = Hash;
+
+    fn create_scalar(&self, v: &str, style: TScalarStyle,
+                     tag: &Option<TokenType>, _mark: Marker) -> Self::Item {
         if style != TScalarStyle::Plain {
             Yaml::String(v.into())
         } else if let Some(TokenType::Tag(ref handle, ref suffix)) = *tag {
@@ -193,8 +205,20 @@ impl Item for Yaml {
         }
     }
 
-    fn create_bad_value() -> Self {
+    fn create_bad_value(&self) -> Self::Item {
         Yaml::BadValue
+    }
+
+    fn create_sequence(&self, _mark: Marker) -> Self::Sequence {
+        Vec::new()
+    }
+
+    fn create_mapping(&self, _mark: Marker) -> Self::Mapping {
+        Hash::new()
+    }
+
+    fn create_document(&mut self, item: Yaml) {
+        self.0.push(item)
     }
 }
 
@@ -203,10 +227,6 @@ pub type Array = Vec<Yaml>;
 
 impl Sequence for Array {
     type Item = Yaml;
-
-    fn create(_mark: Marker) -> Self {
-        Vec::new()
-    }
 
     fn push(&mut self, item: Yaml) {
         self.push(item)
@@ -223,12 +243,8 @@ pub type Hash = BTreeMap<Yaml, Yaml>;
 #[cfg(feature = "preserve_order")]
 pub type Hash = ::linked_hash_map::LinkedHashMap<Yaml, Yaml>;
 
-impl Map for Hash {
+impl Mapping for Hash {
     type Item = Yaml;
-
-    fn create(_mark: Marker) -> Self {
-        Hash::new()
-    }
 
     fn insert(&mut self, key: Yaml, value: Yaml) {
         self.insert(key, value);
@@ -240,17 +256,17 @@ impl Map for Hash {
 }
 
 
-enum Node<D: Document> {
+enum Node<D: YamlStream> {
     Scalar(D::Item),
     Array(D::Sequence),
-    Hash(D::Map),
-    BadValue,
+    Hash(D::Mapping),
+    BadValue(D::Item),
 }
 
-impl<D: Document> Node<D> {
+impl<D: YamlStream> Node<D> {
     pub fn is_badvalue(&self) -> bool {
         match *self {
-            Node::BadValue => true,
+            Node::BadValue(_) => true,
             _ => false
         }
     }
@@ -260,26 +276,24 @@ impl<D: Document> Node<D> {
             Node::Scalar(item) => item,
             Node::Array(item) => item.finalize(),
             Node::Hash(item) => item.finalize(),
-            Node::BadValue => <D::Item as Item>::create_bad_value()
+            Node::BadValue(item) => item,
         }
     }
 }
 
-impl<D: Document> Clone for Node<D> {
+impl<D: YamlStream> Clone for Node<D> {
     fn clone(&self) -> Self {
         match *self {
             Node::Scalar(ref item) => Node::Scalar(item.clone()),
             Node::Array(ref item) => Node::Array(item.clone()),
             Node::Hash(ref item) => Node::Hash(item.clone()),
-            Node::BadValue => Node::BadValue
+            Node::BadValue(ref item) => Node::BadValue(item.clone()),
         }
     }
 }
 
-pub type YamlLoader = GenericYamlLoader<Yaml>;
-
-pub struct GenericYamlLoader<D: Document> {
-    docs: Vec<D>,
+pub struct GenericYamlLoader<D: YamlStream> {
+    builder: D,
     // states
     // (current node, anchor_id) tuple
     doc_stack: Vec<(Node<D>, usize)>,
@@ -287,7 +301,7 @@ pub struct GenericYamlLoader<D: Document> {
     anchor_map: BTreeMap<usize, Node<D>>,
 }
 
-impl<D: Document> MarkedEventReceiver for GenericYamlLoader<D> {
+impl<D: YamlStream> MarkedEventReceiver for GenericYamlLoader<D> {
     fn on_event(&mut self, ev: &Event, mark: Marker) {
         // println!("EV {:?}", ev);
         match *ev {
@@ -297,15 +311,15 @@ impl<D: Document> MarkedEventReceiver for GenericYamlLoader<D> {
             Event::DocumentEnd => {
                 let node = match self.doc_stack.len() {
                     // empty document
-                    0 => Node::BadValue,
+                    0 => Node::BadValue(self.builder.create_bad_value()),
                     1 => self.doc_stack.pop().unwrap().0,
                     _ => unreachable!()
                 };
-                self.docs.push(D::create(node.into_item()));
+                self.builder.create_document(node.into_item());
             },
             Event::SequenceStart(aid) => {
                 self.doc_stack.push(
-                    (Node::Array(<D::Sequence as Sequence>::create(mark)),
+                    (Node::Array(self.builder.create_sequence(mark)),
                      aid));
             },
             Event::SequenceEnd => {
@@ -314,8 +328,9 @@ impl<D: Document> MarkedEventReceiver for GenericYamlLoader<D> {
             },
             Event::MappingStart(aid) => {
                 self.doc_stack.push(
-                    (Node::Hash(<D::Map as Map>::create(mark)), aid));
-                self.key_stack.push(Node::BadValue);
+                    (Node::Hash(self.builder.create_mapping(mark)), aid));
+                self.key_stack.push(
+                    Node::BadValue(self.builder.create_bad_value()));
             },
             Event::MappingEnd => {
                 self.key_stack.pop().unwrap();
@@ -323,14 +338,13 @@ impl<D: Document> MarkedEventReceiver for GenericYamlLoader<D> {
                 self.insert_new_node(node);
             },
             Event::Scalar(ref v, style, aid, ref tag) => {
-                let item = <D::Item as Item>::create_scalar(v, style, tag,
-                                                            mark);
+                let item = self.builder.create_scalar(v, style, tag, mark);
                 self.insert_new_node((Node::Scalar(item), aid));
             },
             Event::Alias(id) => {
                 let n = match self.anchor_map.get(&id) {
                     Some(v) => v.clone(),
-                    None => Node::BadValue,
+                    None => Node::BadValue(self.builder.create_bad_value()),
                 };
                 self.insert_new_node((n, 0));
             }
@@ -340,7 +354,7 @@ impl<D: Document> MarkedEventReceiver for GenericYamlLoader<D> {
     }
 }
 
-impl<D: Document> GenericYamlLoader<D> {
+impl<D: YamlStream> GenericYamlLoader<D> {
     fn insert_new_node(&mut self, node: (Node<D>, usize)) {
         // valid anchor id starts from 1
         if node.1 > 0 {
@@ -359,7 +373,8 @@ impl<D: Document> GenericYamlLoader<D> {
                         *cur_key = node.0;
                     // current node is a value
                     } else {
-                        let mut newkey = Node::BadValue;
+                        let mut newkey = Node::BadValue(
+                                            self.builder.create_bad_value());
                         mem::swap(&mut newkey, cur_key);
                         h.insert(newkey.into_item(), node.0.into_item());
                     }
@@ -369,18 +384,20 @@ impl<D: Document> GenericYamlLoader<D> {
         }
     }
 
-    pub fn load_from_str(source: &str) -> Result<Vec<D>, ScanError>{
+    pub fn load_from_str(source: &str, builder: D)
+                         -> Result<D, ScanError>{
         let mut loader = GenericYamlLoader {
-            docs: Vec::new(),
+            builder: builder,
             doc_stack: Vec::new(),
             key_stack: Vec::new(),
             anchor_map: BTreeMap::new(),
         };
         let mut parser = Parser::new(source.chars());
         try!(parser.load(&mut loader, true));
-        Ok(loader.docs)
+        Ok(loader.builder)
     }
 }
+
 
 macro_rules! define_as (
     ($name:ident, $t:ident, $yt:ident) => (
