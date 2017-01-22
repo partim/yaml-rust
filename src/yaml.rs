@@ -12,7 +12,7 @@ use scanner::{TScalarStyle, ScanError, TokenType, Marker};
 /// A trait for parsing a stream of YAML documents.
 ///
 /// Stored YAML data is called a ‘YAML character stream.’ It may contain a
-/// several completely independent documents. The `YamlStream` trait is used
+/// several completely independent documents. The `Stream` trait is used
 /// by `GenericYamlLoader` to parse documents from a character stream.
 ///
 /// A YAML document consists of elements that are either scalars, sequences,
@@ -25,7 +25,7 @@ use scanner::{TScalarStyle, ScanError, TokenType, Marker};
 /// Once a document is finished, the method `create_document()` is called to
 /// give the `Self::Item` representing all elements of the document to the
 /// stream to process it.
-pub trait YamlStream {
+pub trait Stream {
     /// The type for all items of the document.
     type Item: Clone;
 
@@ -156,7 +156,7 @@ impl YamlLoader {
 }
 
 
-impl YamlStream for YamlLoader {
+impl Stream for YamlLoader {
     type Item = Yaml;
     type Sequence = Array;
     type Mapping = Hash;
@@ -256,14 +256,14 @@ impl Mapping for Hash {
 }
 
 
-enum Node<D: YamlStream> {
+enum Node<D: Stream> {
     Scalar(D::Item),
     Array(D::Sequence),
     Hash(D::Mapping),
     BadValue(D::Item),
 }
 
-impl<D: YamlStream> Node<D> {
+impl<D: Stream> Node<D> {
     pub fn is_badvalue(&self) -> bool {
         match *self {
             Node::BadValue(_) => true,
@@ -281,7 +281,7 @@ impl<D: YamlStream> Node<D> {
     }
 }
 
-impl<D: YamlStream> Clone for Node<D> {
+impl<D: Stream> Clone for Node<D> {
     fn clone(&self) -> Self {
         match *self {
             Node::Scalar(ref item) => Node::Scalar(item.clone()),
@@ -292,7 +292,7 @@ impl<D: YamlStream> Clone for Node<D> {
     }
 }
 
-pub struct GenericYamlLoader<D: YamlStream> {
+pub struct GenericYamlLoader<D: Stream> {
     builder: D,
     // states
     // (current node, anchor_id) tuple
@@ -301,7 +301,7 @@ pub struct GenericYamlLoader<D: YamlStream> {
     anchor_map: BTreeMap<usize, Node<D>>,
 }
 
-impl<D: YamlStream> MarkedEventReceiver for GenericYamlLoader<D> {
+impl<D: Stream> MarkedEventReceiver for GenericYamlLoader<D> {
     fn on_event(&mut self, ev: &Event, mark: Marker) {
         // println!("EV {:?}", ev);
         match *ev {
@@ -354,7 +354,7 @@ impl<D: YamlStream> MarkedEventReceiver for GenericYamlLoader<D> {
     }
 }
 
-impl<D: YamlStream> GenericYamlLoader<D> {
+impl<D: Stream> GenericYamlLoader<D> {
     fn insert_new_node(&mut self, node: (Node<D>, usize)) {
         // valid anchor id starts from 1
         if node.1 > 0 {
