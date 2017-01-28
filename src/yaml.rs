@@ -150,8 +150,9 @@ impl YamlLoader {
     }
 
     pub fn load_from_str(source: &str) -> Result<Vec<Yaml>, ScanError> {
-        GenericYamlLoader::load_from_str(source, YamlLoader::new())
-                         .map(|loader| loader.0)
+        let mut loader = YamlLoader::new();
+        GenericYamlLoader::load_from_str(source, &mut loader)?;
+        Ok(loader.0)
     }
 }
 
@@ -292,8 +293,8 @@ impl<D: Stream> Clone for Node<D> {
     }
 }
 
-pub struct GenericYamlLoader<D: Stream> {
-    builder: D,
+pub struct GenericYamlLoader<'a, D: Stream + 'a> {
+    builder: &'a mut D,
     // states
     // (current node, anchor_id) tuple
     doc_stack: Vec<(Node<D>, usize)>,
@@ -301,7 +302,7 @@ pub struct GenericYamlLoader<D: Stream> {
     anchor_map: BTreeMap<usize, Node<D>>,
 }
 
-impl<D: Stream> MarkedEventReceiver for GenericYamlLoader<D> {
+impl<'a, D: Stream + 'a> MarkedEventReceiver for GenericYamlLoader<'a, D> {
     fn on_event(&mut self, ev: &Event, mark: Marker) {
         // println!("EV {:?}", ev);
         match *ev {
@@ -354,7 +355,7 @@ impl<D: Stream> MarkedEventReceiver for GenericYamlLoader<D> {
     }
 }
 
-impl<D: Stream> GenericYamlLoader<D> {
+impl<'a, D: Stream + 'a> GenericYamlLoader<'a, D> {
     fn insert_new_node(&mut self, node: (Node<D>, usize)) {
         // valid anchor id starts from 1
         if node.1 > 0 {
@@ -384,8 +385,8 @@ impl<D: Stream> GenericYamlLoader<D> {
         }
     }
 
-    pub fn load_from_str(source: &str, builder: D)
-                         -> Result<D, ScanError>{
+    pub fn load_from_str(source: &str, builder: &mut D)
+                         -> Result<(), ScanError>{
         let mut loader = GenericYamlLoader {
             builder: builder,
             doc_stack: Vec::new(),
@@ -394,7 +395,7 @@ impl<D: Stream> GenericYamlLoader<D> {
         };
         let mut parser = Parser::new(source.chars());
         try!(parser.load(&mut loader, true));
-        Ok(loader.builder)
+        Ok(())
     }
 }
 
