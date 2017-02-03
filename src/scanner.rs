@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::{char, fmt};
+use std::{char, cmp, fmt};
 use std::error::Error;
 
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
@@ -18,7 +18,7 @@ pub enum TScalarStyle {
     Foled
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub struct Marker {
     index: usize,
     line: usize,
@@ -38,6 +38,27 @@ impl Marker {
     pub fn line(&self) -> usize { self.line }
     pub fn col(&self) -> usize { self.col }
 }
+
+impl PartialEq for Marker {
+    fn eq(&self, other: &Marker) -> bool {
+        self.index == other.index
+    }
+}
+
+impl Eq for Marker { }
+
+impl PartialOrd for Marker {
+    fn partial_cmp(&self, other: &Marker) -> Option<cmp::Ordering> {
+        self.index.partial_cmp(&other.index)
+    }
+}
+
+impl Ord for Marker {
+    fn cmp(&self, other: &Marker) -> cmp::Ordering {
+        self.index.cmp(&other.index)
+    }
+}
+
 
 #[derive(Clone, PartialEq, Debug, Eq)]
 pub struct ScanError {
