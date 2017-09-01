@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::ops::Index;
 use std::string;
 use std::i64;
-use std::str::FromStr;
 use std::mem;
 use std::vec;
 use parser::*;
@@ -43,7 +42,7 @@ pub trait Stream {
     ///
     /// Such values are created for invalid type conversion and when
     /// accessing non-existent aliases.
-    fn create_bad_value(&self) -> Self::Item;
+    fn create_bad_value(&self, mark: Marker) -> Self::Item;
 
     /// Creates a new sequence builder.
     fn create_sequence(&self, mark: Marker) -> Self::Sequence;
@@ -206,7 +205,7 @@ impl Stream for YamlLoader {
         }
     }
 
-    fn create_bad_value(&self) -> Self::Item {
+    fn create_bad_value(&self, _mark: Marker) -> Self::Item {
         Yaml::BadValue
     }
 
@@ -312,7 +311,7 @@ impl<'a, D: Stream + 'a> MarkedEventReceiver for GenericYamlLoader<'a, D> {
             Event::DocumentEnd => {
                 let node = match self.doc_stack.len() {
                     // empty document
-                    0 => Node::BadValue(self.builder.create_bad_value()),
+                    0 => Node::BadValue(self.builder.create_bad_value(mark)),
                     1 => self.doc_stack.pop().unwrap().0,
                     _ => unreachable!()
                 };
@@ -325,29 +324,30 @@ impl<'a, D: Stream + 'a> MarkedEventReceiver for GenericYamlLoader<'a, D> {
             },
             Event::SequenceEnd => {
                 let node = self.doc_stack.pop().unwrap();
-                self.insert_new_node(node);
+                self.insert_new_node(node, mark);
             },
             Event::MappingStart(aid) => {
                 self.doc_stack.push(
                     (Node::Hash(self.builder.create_mapping(mark)), aid));
                 self.key_stack.push(
-                    Node::BadValue(self.builder.create_bad_value()));
+                    Node::BadValue(self.builder.create_bad_value(mark)));
             },
             Event::MappingEnd => {
                 self.key_stack.pop().unwrap();
                 let node = self.doc_stack.pop().unwrap();
-                self.insert_new_node(node);
+                self.insert_new_node(node, mark);
             },
             Event::Scalar(ref v, style, aid, ref tag) => {
                 let item = self.builder.create_scalar(v, style, tag, mark);
-                self.insert_new_node((Node::Scalar(item), aid));
+                self.insert_new_node((Node::Scalar(item), aid), mark);
             },
             Event::Alias(id) => {
                 let n = match self.anchor_map.get(&id) {
                     Some(v) => v.clone(),
-                    None => Node::BadValue(self.builder.create_bad_value()),
+                    None => Node::BadValue(
+                                        self.builder.create_bad_value(mark)),
                 };
-                self.insert_new_node((n, 0));
+                self.insert_new_node((n, 0), mark);
             }
             _ => { /* ignore */ }
         }
@@ -356,7 +356,7 @@ impl<'a, D: Stream + 'a> MarkedEventReceiver for GenericYamlLoader<'a, D> {
 }
 
 impl<'a, D: Stream + 'a> GenericYamlLoader<'a, D> {
-    fn insert_new_node(&mut self, node: (Node<D>, usize)) {
+    fn insert_new_node(&mut self, node: (Node<D>, usize), mark: Marker) {
         // valid anchor id starts from 1
         if node.1 > 0 {
             self.anchor_map.insert(node.1, node.0.clone());
@@ -375,7 +375,7 @@ impl<'a, D: Stream + 'a> GenericYamlLoader<'a, D> {
                     // current node is a value
                     } else {
                         let mut newkey = Node::BadValue(
-                                            self.builder.create_bad_value());
+                                         self.builder.create_bad_value(mark));
                         mem::swap(&mut newkey, cur_key);
                         h.insert(newkey.into_item(), node.0.into_item());
                     }
